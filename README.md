@@ -120,10 +120,70 @@ sets that spot back to full. Items without a home get a drop-down to choose one.
 |---|---|
 | Everything (locations, ingredients, stock, lists, put-away, purchases, recipes) | `data/pantry.db` (SQLite) |
 | Ingredient, location and recipe pictures (≤600px) | `data/images/` |
+| Weekly backups (newest 3) | `data/backups/` |
 | Koillection mirror of each ingredient | the **Pantry** collection in Koillection |
 
-`data/` is mounted into the container, so it survives rebuilds. Back it
-up by copying the folder.
+`data/` is mounted into the container, so it survives rebuilds.
+
+### Backups
+
+The app backs itself up automatically: **once a week** it saves a copy of
+the database and pictures to `data/backups/<date>_<time>/` and keeps the
+**3 newest** (about three weeks of history). The home screen footer shows
+when the last one was made.
+
+- The database copy is made with SQLite's backup API, so it's consistent
+  even while someone is using the app, and each one is integrity-checked.
+- Pictures are hard-linked rather than copied. They never change once
+  saved, so this costs no extra disk space, and a picture deleted later
+  still exists in any backup that uses it.
+- A backup is due 7 days after the previous one. The app checks hourly,
+  and the first one is made a minute after the app first starts.
+- Make one right now (before a big clean-up, say):
+  `curl -X POST http://localhost:5010/api/backups`
+- Change the schedule in `docker-compose.yml` with `BACKUP_INTERVAL_DAYS`
+  and `BACKUP_KEEP`.
+
+These live on the Pi's own disk, so they protect against mistakes and a
+corrupted database, not against the disk failing. For that, include
+`/home/pi/Scripts/pantry-shelf/data` in an off-Pi backup (e.g. Backrest).
+
+### Rolling back to a backup
+
+```bash
+cd /home/pi/Scripts/pantry-shelf
+./restore.sh                      # lists backups, newest first
+./restore.sh 2026-11-18_031500    # roll back to that one
+```
+
+`restore.sh` stops the container, moves the current database and pictures
+aside to `data/pre-restore-<time>/`, puts the chosen backup in place, and
+starts the container again. Anything changed since that backup is lost from
+the app, but it's kept in the `pre-restore-` folder.
+
+**Undoing a restore** (going back to how things were just before it):
+
+```bash
+cd /home/pi/Scripts/pantry-shelf
+docker compose stop pantry-shelf
+sudo rm -rf data/pantry.db data/pantry.db-wal data/pantry.db-shm data/images
+sudo mv data/pre-restore-<time>/* data/
+sudo rmdir data/pre-restore-<time>
+docker compose start pantry-shelf
+```
+
+**By hand** (if the script can't be used): stop the container; delete
+`data/pantry.db`, `data/pantry.db-wal` and `data/pantry.db-shm` (the last two
+may not exist, and stale ones would corrupt the restored copy); copy
+`data/backups/<name>/pantry.db` to `data/pantry.db`; replace `data/images`
+with `cp -al data/backups/<name>/images data/images`; start the container.
+
+The `pre-restore-` folders aren't cleaned up automatically. Delete them
+once you're happy with the restore.
+
+Restoring the database doesn't change the Koillection mirror. To bring
+Koillection back in line, run
+`curl -X POST http://localhost:5010/api/koillection/resync`.
 
 ### Koillection mirror
 Koillection isn't a great fit as the database here: levels change daily,
@@ -152,6 +212,8 @@ store.py          Business logic: snapshot, locations, ingredients/stock, lists,
 db.py             SQLite schema + connection helpers
 sources.py        TheMealDB / Open Food Facts lookups, image download+resize, recipe import/paste, line matching
 koi_mirror.py     Background one-way push to Koillection
+backup.py         Weekly database + picture backups, keeps 3
+restore.sh        Roll back to a backup
 koillection_client.py  Koillection REST client (copied from movie-shelf)
 static/
   index.html      Shell

@@ -314,7 +314,8 @@ route(/^\/$/, () => {
     <a href="#/pantry">pantry shelves</a>, then add ingredients.</div>` : ""}
   <footer class="status">${S.ingredients.length} ingredients ·
     Koillection mirror: ${k.enabled ? (k.error ? `<span style="color:var(--red)" title="${esc(k.error)}">error</span>`
-      : `on (“${esc(k.collection)}”)${k.pending ? `, ${k.pending} pending` : ""}`) : "off"}</footer>`;
+      : `on (“${esc(k.collection)}”)${k.pending ? `, ${k.pending} pending` : ""}`) : "off"}
+    · Last backup: ${S.last_backup ? fmtDate(S.last_backup) : "not yet"}</footer>`;
 });
 
 // ── search ──────────────────────────────────────────────────────────────────

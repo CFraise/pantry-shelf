@@ -7,6 +7,9 @@ services:
       - "5010:5010"
     environment:
       - TZ=America/Los_Angeles
+      # Automatic backups to data/backups/
+      - BACKUP_INTERVAL_DAYS=${BACKUP_INTERVAL_DAYS:-7}
+      - BACKUP_KEEP=${BACKUP_KEEP:-3}
       # Mirror ingredients into a Koillection "Pantry" collection (read-only copy).
       - KOI_MIRROR=${KOI_MIRROR:-1}
       - KOI_COLLECTION=${KOI_COLLECTION:-Pantry}

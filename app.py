@@ -6,6 +6,7 @@ import re
 
 from flask import Flask, Response, jsonify, request, send_from_directory
 
+import backup
 import db
 import koi_mirror
 import sources
@@ -16,6 +17,7 @@ app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
 
 db.init()
 koi_mirror.start()
+backup.start()
 
 
 @app.errorhandler(store.NotFound)
@@ -81,7 +83,20 @@ def fetch_image():
 
 @app.get("/api/snapshot")
 def snapshot():
-    return jsonify(store.snapshot())
+    snap = store.snapshot()
+    b = backup.list_backups()
+    snap["last_backup"] = b[0]["created"] if b else None
+    return jsonify(snap)
+
+
+@app.get("/api/backups")
+def backups_list():
+    return jsonify(backup.list_backups())
+
+
+@app.post("/api/backups")
+def backups_make():
+    return jsonify(backup.make_backup())
 
 
 @app.get("/api/lookup")
