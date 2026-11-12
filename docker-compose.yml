@@ -1,0 +1,21 @@
+services:
+  pantry-shelf:
+    build: .
+    container_name: pantry-shelf
+    restart: unless-stopped
+    ports:
+      - "5010:5010"
+    environment:
+      - TZ=America/Los_Angeles
+      # Mirror ingredients into a Koillection "Pantry" collection (read-only copy).
+      - KOI_MIRROR=${KOI_MIRROR:-1}
+      - KOI_COLLECTION=${KOI_COLLECTION:-Pantry}
+      - KOILLECTION_URL=${KOILLECTION_URL:-}
+      - KOILLECTION_USERNAME=${KOILLECTION_USERNAME:-}
+      - KOILLECTION_PASSWORD=${KOILLECTION_PASSWORD:-}
+    volumes:
+      - ./data:/data
+      # Koillection login, shared with koicli / movie-shelf
+      - /home/pi/.config/koicli:/root/.config/koicli:ro
+      # Live-edit the UI without rebuilding
+      - ./static:/app/static:ro
