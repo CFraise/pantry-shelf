@@ -46,10 +46,11 @@ route(/^\/kitchen$/, () => {
   const loose = unplaced("kitchen");
   const ed = UI.editKitchen;
   return `
-  <div class="toolbar">${backBtn("#/", "‹ Home")}<span class="spacer"></span>
+  <div class="toolbar">${backBtn("#/", "‹ Home")}<span class="spacer"></span>${shelfSortControl()}
     <button class="btn ${ed ? "on" : ""}" data-act="toggle" data-key="editKitchen">${ed ? "✓ Done editing" : "✏️ Edit areas"}</button>
     <button class="btn primary" data-act="add-ing" data-space="kitchen">+ Ingredient</button></div>
   <header class="page"><h1>🍳 Kitchen</h1><p>${areas.length ? "Tap an area to look inside" : "Set up the areas of your kitchen"}</p></header>
+  ${searchBox({ space: "kitchen" })}
   <div class="areas">
     ${areas.map(a => {
       const n = stockAt(a.id, { deep: true }).length, low = lowCountIn(a.id);
@@ -86,12 +87,13 @@ route(/^\/kitchen\/area\/(\d+)$/, (p, id) => {
   const ed = UI.editArea;
   const z = zoomStyle();
   return `<div class="zoom-in" style="display:flex;flex-direction:column;gap:16px;${z}">
-  <div class="toolbar">${backBtn("#/kitchen", "‹ Kitchen")}<span class="spacer"></span>
+  <div class="toolbar">${backBtn("#/kitchen", "‹ Kitchen")}<span class="spacer"></span>${shelfSortControl()}
     <button class="btn ${ed ? "on" : ""}" data-act="toggle" data-key="editArea">${ed ? "✓ Done editing" : "✏️ Edit shelves"}</button>
     <button class="btn" data-act="loc-edit" data-id="${area.id}">🖼️ Area</button>
     <button class="btn primary" data-act="add-ing" data-space="kitchen" data-loc="${area.id}">+ Ingredient</button></div>
   <div class="area-hero">${locVisual(area)}<h1>${esc(area.name)}</h1></div>
   ${area.subtitle ? `<p class="muted">${esc(area.subtitle)}</p>` : ""}
+  ${searchBox({ space: "kitchen" })}
   <div class="shelves">
     ${shelves.map(s => shelfBlock(s, ed)).join("")}
     ${!shelves.length && !ed ? `<div class="empty-note">No shelves yet. Use <b>Edit shelves</b> to add some, or add ingredients straight to this area.</div>` : ""}
@@ -132,11 +134,12 @@ route(/^\/pantry$/, () => {
   const archived = S.ingredients.filter(i => i.archived).length;
   const loose = unplaced("pantry");
   return `
-  <div class="toolbar">${backBtn("#/", "‹ Home")}<span class="spacer"></span>
+  <div class="toolbar">${backBtn("#/", "‹ Home")}<span class="spacer"></span>${shelfSortControl()}
     <button class="btn" data-go="#/pantry/archived">🗃️ Archived (${archived})</button>
     <button class="btn ${ed ? "on" : ""}" data-act="toggle" data-key="editPantry">${ed ? "✓ Done editing" : "✏️ Edit shelves & bins"}</button>
     <button class="btn primary" data-act="add-ing" data-space="pantry">+ Ingredient</button></div>
   <header class="page"><h1>🥫 Pantry</h1><p>${shelves.length ? "Tap a bin to see what's in it" : "Add your pantry shelves to get started"}</p></header>
+  ${searchBox({ space: "pantry" })}
   <div class="shelves">
     ${shelves.map(s => pantryShelf(s, ed)).join("")}
     ${ed || !shelves.length ? `<button class="btn" data-act="loc-new" data-space="pantry" data-kind="shelf" style="align-self:flex-start">+ New shelf</button>` : ""}
@@ -187,10 +190,11 @@ route(/^\/pantry\/bin\/(\d+)$/, (p, id) => {
   const items = stockAt(bin.id);
   const z = zoomStyle();
   return `<div class="zoom-in" style="display:flex;flex-direction:column;gap:16px;${z}">
-  <div class="toolbar">${backBtn("#/pantry", "‹ Pantry")}<span class="spacer"></span>
+  <div class="toolbar">${backBtn("#/pantry", "‹ Pantry")}<span class="spacer"></span>${shelfSortControl()}
     <button class="btn" data-act="loc-edit" data-id="${bin.id}">✏️ Edit bin</button>
     <button class="btn primary" data-act="add-ing" data-space="pantry" data-loc="${bin.id}">+ Ingredient</button></div>
   <header class="page"><h1>📦 ${esc(bin.name)}</h1><p>${esc(shelf ? shelf.name : "")}${bin.subtitle ? " · " + esc(bin.subtitle) : ""}</p></header>
+  ${searchBox({ space: "pantry" })}
   ${items.length ? `<div class="tiles">${items.map(x => tile(x.ing, x.st)).join("")}</div>`
     : `<div class="empty-note">This bin is empty.</div>`}</div>`;
 });

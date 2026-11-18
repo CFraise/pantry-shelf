@@ -41,6 +41,76 @@ ACT["low-add-all"] = el => {
 };
 ACT["stock-full"] = el => act(() => api("PATCH", `/api/stock/${el.dataset.sid}`, { level: LMAX }));
 
+// ── everything: one text row per ingredient, filter by category, sort ──────
+const catKey = ing => ing.category || "";
+const catRank = c => { const i = CATEGORIES.indexOf(c); return c === "" ? 1e6 : i < 0 ? 1e5 : i; };
+const minLevel = ing => ing.stock.length ? Math.min(...ing.stock.map(s => s.level)) : null;
+
+route(/^\/all$/, () => {
+  const pool = S.ingredients.filter(i => UI.allArchived || !i.archived);
+  // Every category in use: the standard list's order first, then custom ones, then "No category".
+  const counts = new Map();
+  for (const i of pool) counts.set(catKey(i), (counts.get(catKey(i)) || 0) + 1);
+  const cats = [...new Set([...CATEGORIES, ...counts.keys()])].sort((a, b) => catRank(a) - catRank(b) || a.localeCompare(b));
+  const shown = pool.filter(i => !UI.allHidden.has(catKey(i)));
+  const dir = UI.allDesc ? -1 : 1;
+  shown.sort((a, b) => {
+    if (UI.allSort === "fill") {                 // unstocked always last
+      const la = minLevel(a), lb = minLevel(b);
+      if ((la == null) !== (lb == null)) return la == null ? 1 : -1;
+      return (la - lb) * dir || byName(a, b);
+    }
+    if (UI.allSort === "category") {
+      return (catRank(catKey(a)) - catRank(catKey(b)) || catKey(a).localeCompare(catKey(b))) * dir || byName(a, b);
+    }
+    return byName(a, b) * dir;
+  });
+
+  const row = ing => {
+    const lvl = minLevel(ing);
+    const where = ing.stock.length ? ing.stock.map(s => esc(locPath(s.location_id))).join("<br>") : `<span class="muted">Not stocked</span>`;
+    return `<div class="all-row clickable ${lvl == null ? "" : lvlClass(lvl)}" data-act="ing" data-id="${ing.id}">
+      <div class="a-name"><b>${esc(ing.name)}</b>${ing.brand ? `<small>${esc(ing.brand)}</small>` : ""}${ing.archived ? ' <span class="src">archived</span>' : ""}</div>
+      <div class="a-cat">${esc(ing.category) || `<span class="muted">—</span>`}</div>
+      <div class="a-where">${where}</div>
+      <div class="a-fill">${lvl == null ? `<span class="muted">—</span>` : pctTag(lvl)}</div></div>`;
+  };
+  let body = "", last = null;
+  for (const ing of shown) {
+    if (UI.allSort === "category" && catKey(ing) !== last) {
+      last = catKey(ing);
+      body += `<div class="all-group">${esc(last || "No category")}</div>`;
+    }
+    body += row(ing);
+  }
+  const sortBtn = (k, l) => `<button class="chip ${UI.allSort === k ? "on" : ""}" data-act="all-sort" data-k="${k}">${l}</button>`;
+  const dirLabel = UI.allSort === "fill" ? (UI.allDesc ? "Fullest first" : "Emptiest first")
+    : UI.allDesc ? "Z → A" : "A → Z";
+  return `<div class="toolbar">${backBtn("#/", "‹ Home")}</div>
+  <header class="page"><h1>📋 Everything</h1><p>${plural(shown.length, "ingredient")}${shown.length !== pool.length ? ` of ${pool.length}` : ""}</p></header>
+  <div class="all-filters">
+    <div class="all-line cats"><span class="clabel">Show</span>
+      <div class="chips">${cats.map(c => `<button class="chip ${UI.allHidden.has(c) ? "" : "on"} ${counts.get(c) ? "" : "zero"}" data-act="all-cat" data-k="${esc(c)}">${esc(c || "No category")} <span class="n">${counts.get(c) || 0}</span></button>`).join("")}
+        <button class="chip ghost" data-act="all-cats" data-on="1">All</button><button class="chip ghost" data-act="all-cats" data-on="0">None</button>
+        <button class="chip ${UI.allArchived ? "on" : ""}" data-act="all-arch">🗃️ Archived</button></div></div>
+    <div class="all-line"><span class="clabel">Sort</span>
+      <div class="chips">${sortBtn("category", "Category")}${sortBtn("name", "Name")}${sortBtn("fill", "Fill %")}
+        <button class="chip ghost" data-act="all-dir">⇅ ${dirLabel}</button></div></div>
+  </div>
+  ${shown.length ? `<div class="all-list"><div class="all-row head"><div>Name</div><div>Category</div><div>Where</div><div>Fill</div></div>${body}</div>`
+    : `<div class="empty-note">${pool.length ? "Nothing matches these filters." : "No ingredients yet."}</div>`}`;
+});
+
+ACT["all-cat"] = el => { const k = el.dataset.k; UI.allHidden.has(k) ? UI.allHidden.delete(k) : UI.allHidden.add(k); render(); };
+ACT["all-cats"] = el => {
+  UI.allHidden.clear();
+  if (el.dataset.on === "0") for (const c of ["", ...CATEGORIES, ...S.ingredients.map(catKey)]) UI.allHidden.add(c);
+  render();
+};
+ACT["all-sort"] = el => { UI.allSort = el.dataset.k; UI.allDesc = false; render(); };
+ACT["all-dir"] = () => { UI.allDesc = !UI.allDesc; render(); };
+ACT["all-arch"] = () => { UI.allArchived = !UI.allArchived; render(); };
+
 // ── put away ────────────────────────────────────────────────────────────────
 route(/^\/putaway$/, () => {
   const rows = S.putaway.map(p => {

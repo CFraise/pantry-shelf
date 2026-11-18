@@ -141,6 +141,18 @@ CREATE TABLE IF NOT EXISTS recipe_collection_links (
     PRIMARY KEY (recipe_id, collection_id)
 );
 
+-- A spot's level going up a lot (topping a jar back up). Drives the
+-- "most used" sort; see store._note_refill.
+CREATE TABLE IF NOT EXISTS refills (
+    id             INTEGER PRIMARY KEY,
+    ingredient_id  INTEGER NOT NULL REFERENCES ingredients(id) ON DELETE CASCADE,
+    stock_id       INTEGER,
+    from_level     INTEGER NOT NULL,
+    to_level       INTEGER NOT NULL,
+    at             TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_refills_ing ON refills(ingredient_id);
 CREATE INDEX IF NOT EXISTS idx_stock_ingredient ON stock(ingredient_id);
 CREATE INDEX IF NOT EXISTS idx_stock_location ON stock(location_id);
 CREATE INDEX IF NOT EXISTS idx_items_list ON grocery_items(list_id);

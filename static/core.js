@@ -6,6 +6,8 @@ const IX = { ing: new Map(), loc: new Map(), list: new Map(), recipe: new Map() 
 const UI = {                       // view state that survives re-renders
   editKitchen: false, editArea: false, editPantry: false,
   openShelves: new Set(), lowSpace: "all", recipeCol: 0, recipeSort: "name", recipeQ: "",
+  allHidden: new Set(), allSort: "category", allDesc: false, allArchived: false,
+  shelfSort: (() => { try { return localStorage.getItem("shelfSort") || "az"; } catch (_) { return "az"; } })(),
 };
 
 const $ = (s, el = document) => el.querySelector(s);
@@ -39,8 +41,15 @@ async function act(fn, { reload = true, ok } = {}) {
 }
 
 // ── snapshot & indices ──────────────────────────────────────────────────────
-async function refresh(rerender = true) {
-  S = await api("GET", "/api/snapshot");
+let lastSnap = "";
+// ``onlyIfChanged``: the background poll skips the redraw when nothing changed.
+async function refresh(rerender = true, { onlyIfChanged = false } = {}) {
+  const r = await fetch("/api/snapshot");
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+  const text = await r.text();
+  if (onlyIfChanged && text === lastSnap) return;
+  lastSnap = text;
+  S = JSON.parse(text);
   IX.ing = new Map(S.ingredients.map(i => [i.id, i]));
   IX.loc = new Map(S.locations.map(l => [l.id, l]));
   IX.list = new Map(S.lists.map(l => [l.id, l]));
@@ -81,7 +90,7 @@ function stockAt(locId, { deep = false, archived = false } = {}) {
     if (ing.archived && !archived) continue;
     for (const st of ing.stock) if (ids.has(st.location_id)) out.push({ ing, st });
   }
-  return out.sort((a, b) => a.ing.name.localeCompare(b.ing.name));
+  return sortStock(out);
 }
 
 function unplaced(space) {
@@ -90,8 +99,91 @@ function unplaced(space) {
     if (ing.archived) continue;
     for (const st of ing.stock) if (st.space === space && !IX.loc.has(st.location_id)) out.push({ ing, st });
   }
-  return out;
+  return sortStock(out);
 }
+
+// ── shelf sort (applies to every shelf, bin and area view) ──────────────────
+// "Used" = how many times it's been refilled (see store._note_refill). A–Z breaks ties.
+const SHELF_SORTS = {
+  az: "A–Z", za: "Z–A", used: "Most used", unused: "Least used", full: "Most full", empty: "Least full",
+};
+const byName = (a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+function sortStock(list, how = UI.shelfSort) {
+  const key = {
+    used: x => -(x.ing.refills || 0), unused: x => x.ing.refills || 0,
+    full: x => -x.st.level, empty: x => x.st.level,
+  }[how];
+  return list.sort((a, b) => (how === "za" ? byName(b.ing, a.ing)
+    : (key ? key(a) - key(b) : 0) || byName(a.ing, b.ing)));
+}
+function shelfSortControl() {
+  return `<label class="sort-pick" title="Sort items on the shelves">⇅ <select data-act-change="shelf-sort">
+    ${Object.entries(SHELF_SORTS).map(([k, v]) => `<option value="${k}" ${k === UI.shelfSort ? "selected" : ""}>${v}</option>`).join("")}
+  </select></label>`;
+}
+
+// ── categories ──────────────────────────────────────────────────────────────
+const CATEGORIES = ["Spice", "Herb", "Seasoning blend", "Baking", "Sweetener", "Oil & vinegar",
+  "Condiment & sauce", "Grain, rice & pasta", "Beans & legumes", "Canned goods", "Nuts & seeds",
+  "Snacks", "Drinks", "Dairy", "Produce", "Frozen"];
+
+// Map an outside category (TheMealDB "Spice", Open Food Facts "Ground cinnamon")
+// or a name onto the list above; "" when nothing fits.
+const CAT_RULES = [
+  [/frozen/, "Frozen"],
+  [/seasoning|blend|\brub\b|masala|curry powder|herbes|za'?atar|old bay|five spice|spice mix/, "Seasoning blend"],
+  [/\bherbs?\b|basil|oregano|thyme|parsley|rosemary|\bsage\b|\bdill\b|\bmint\b|cilantro|bay lea|tarragon|chives/, "Herb"],
+  [/spice|pepper|paprika|cumin|cinnamon|nutmeg|\bclove|turmeric|ginger|chil[ie]|cayenne|cardamom|coriander|\bsalt\b|allspice|\bmace\b|saffron|fenugreek|sumac|anise|fennel seed|mustard seed|garlic powder|onion powder/, "Spice"],
+  [/sugar|honey|syrup|sweetener|molasses|agave|stevia/, "Sweetener"],
+  [/baking|flour|yeast|cocoa|vanilla|cornstarch|starch|chocolate chip|sprinkles/, "Baking"],
+  [/\boils?\b|vinegar/, "Oil & vinegar"],
+  [/sauce|condiment|ketchup|mustard|mayo|dressing|salsa|paste|relish|\bsoy\b|hot sauce|chutney/, "Condiment & sauce"],
+  [/grain|\brice\b|pasta|noodle|cereal|\boats?\b|quinoa|couscous|bread|spaghetti|macaroni/, "Grain, rice & pasta"],
+  [/\bbeans?\b|lentil|legume|chickpea|pulse/, "Beans & legumes"],
+  [/canned|tinned|soup|broth|\bstock\b/, "Canned goods"],
+  [/\bnuts?\b|seeds?\b|almond|peanut|cashew|walnut|pecan|pistachio|hazelnut/, "Nuts & seeds"],
+  [/snack|chips|cracker|cookie|candy|chocolate|biscuit|popcorn|pretzel/, "Snacks"],
+  [/drink|beverage|coffee|\btea\b|juice|soda|water/, "Drinks"],
+  [/dairy|milk|cheese|butter|yog(h)?urt|cream|\beggs?\b/, "Dairy"],
+  [/produce|fruit|vegetable|\bveg\b|fresh/, "Produce"],
+];
+function normCategory(raw) {
+  const s = String(raw || "").toLowerCase().trim();
+  if (!s) return "";
+  const exact = CATEGORIES.find(c => c.toLowerCase() === s || c.toLowerCase() + "s" === s);
+  if (exact) return exact;
+  for (const [re, c] of CAT_RULES) if (re.test(s)) return c;
+  return "";
+}
+
+// A dropdown of CATEGORIES plus "Other…". The real value lives in the
+// input[name=category] beside it, so forms keep reading that field.
+function categoryField(value) {
+  const custom = !!value && !CATEGORIES.includes(value);
+  return `<label class="field">Category<span class="cat-field">
+    <select class="catsel">
+      <option value="" ${!value ? "selected" : ""}>None</option>
+      ${CATEGORIES.map(c => `<option ${c === value ? "selected" : ""}>${esc(c)}</option>`).join("")}
+      <option value="__other" ${custom ? "selected" : ""}>Other…</option>
+    </select>
+    <input name="category" value="${esc(value)}" placeholder="Type a category" ${custom ? "" : "hidden"}></span></label>`;
+}
+document.addEventListener("change", e => {
+  const sel = e.target.closest(".catsel");
+  if (sel) {
+    const inp = sel.parentNode.querySelector("[name=category]");
+    const other = sel.value === "__other";
+    inp.hidden = !other;
+    inp.value = other ? "" : sel.value;
+    if (other) inp.focus();
+    return;
+  }
+  if (e.target.matches("[data-act-change=shelf-sort]")) {
+    UI.shelfSort = e.target.value;
+    try { localStorage.setItem("shelfSort", UI.shelfSort); } catch (_) { /* private mode */ }
+    render();
+  }
+});
 
 // ── levels ──────────────────────────────────────────────────────────────────
 const lvlClass = l => l <= 1 ? "crit" : l <= 2 ? "low" : "";
@@ -223,7 +315,13 @@ const ROUTES = [];
 const route = (re, fn) => ROUTES.push([re, fn]);
 const go = h => { location.hash = h; };
 
+// True only for the render right after navigating, so entrance animations
+// (the zoom into an area or bin) don't replay when data refreshes.
+let navigated = true;
 function render() {
+  const nav = navigated;
+  navigated = false;
+  document.body.classList.toggle("no-enter", !nav);
   const h = location.hash.replace(/^#/, "") || "/";
   const [path, qs] = h.split("?");
   const params = new URLSearchParams(qs || "");
@@ -234,12 +332,13 @@ function render() {
       document.body.dataset.route = path.split("/")[1] || "home";
       $("#banner").classList.toggle("hidden", path !== "/" || !bannerReady);
       if (window.afterRender) { const f = window.afterRender; window.afterRender = null; f(); }
+      wireSearch();
       return;
     }
   }
   go("/");
 }
-window.addEventListener("hashchange", () => { render(); window.scrollTo(0, 0); });
+window.addEventListener("hashchange", () => { navigated = true; render(); window.scrollTo(0, 0); });
 
 // Delegated clicks: data-go="#/x" navigates, data-act="name" runs ACT[name](el, event).
 const ACT = {};
@@ -286,11 +385,9 @@ route(/^\/$/, () => {
   const low = lowStock();
   const crit = low.filter(x => x.st.level <= 1).length;
   const k = S.koillection;
-  window.afterRender = wireSearch;
   return `
   <header class="page"><h1>🥫 Pantry Shelf</h1><p>What's in the cupboard?</p></header>
-  <div class="searchbox"><input id="search" type="search" placeholder="Find an ingredient or recipe…" autocomplete="off">
-    <div class="search-results" id="search-results"></div></div>
+  ${searchBox()}
   <div class="big-grid">
     <button class="big-btn kitchen" data-go="#/kitchen"><span class="emoji">🍳</span>
       <span><span class="label">Kitchen</span><br><span class="sub">${plural(topLocs("kitchen", "area").length, "area")} · ${plural(inK, "item")}</span></span>
@@ -307,6 +404,7 @@ route(/^\/$/, () => {
     <button class="btn primary" data-act="add-ing">+ Add ingredient</button>
     <button class="btn red" data-go="#/low">⚠️ Running low <span class="count ${low.length ? "" : "zero"}">${low.length}</span></button>
     <button class="btn amber" data-go="#/putaway">📦 Put away <span class="count ${S.putaway.length ? "" : "zero"}">${S.putaway.length}</span></button>
+    <button class="btn" data-go="#/all">📋 Everything</button>
     <button class="btn" data-go="#/duplicates">🔁 Duplicates</button>
   </div>
   ${crit ? `<p class="muted" style="text-align:center;font-size:.85rem">${plural(crit, "thing")} empty or nearly empty.</p>` : ""}
@@ -319,13 +417,22 @@ route(/^\/$/, () => {
 });
 
 // ── search ──────────────────────────────────────────────────────────────────
-function searchMatches(q) {
+// The same search box on home and every kitchen/pantry page. ``space`` lists
+// ingredients kept in that space first.
+function searchBox({ space = "" } = {}) {
+  return `<div class="searchbox"><input id="search" type="search" placeholder="Find an ingredient or recipe…" autocomplete="off" data-space="${space}">
+    <div class="search-results" id="search-results"></div></div>`;
+}
+
+function searchMatches(q, space = "") {
   q = q.trim().toLowerCase();
   if (!q) return { ings: [], recipes: [] };
   const words = q.split(/\s+/);
   const hit = s => words.every(w => s.toLowerCase().includes(w));
   const ings = S.ingredients.filter(i => hit(`${i.name} ${i.brand} ${i.category}`))
-    .sort((a, b) => (a.archived - b.archived) || (b.name.toLowerCase().startsWith(q) - a.name.toLowerCase().startsWith(q)));
+    .sort((a, b) => (a.archived - b.archived)
+      || (space ? b.stock.some(s => s.space === space) - a.stock.some(s => s.space === space) : 0)
+      || (b.name.toLowerCase().startsWith(q) - a.name.toLowerCase().startsWith(q)));
   const recipes = S.recipes.filter(r => hit(r.title));
   return { ings, recipes };
 }
@@ -344,7 +451,7 @@ function wireSearch() {
   const input = $("#search"), out = $("#search-results");
   if (!input) return;
   input.oninput = () => {
-    const { ings, recipes } = searchMatches(input.value);
+    const { ings, recipes } = searchMatches(input.value, input.dataset.space);
     if (!input.value.trim()) { out.innerHTML = ""; return; }
     out.innerHTML = (ings.length ? `<div class="sr-head">Ingredients</div><div class="rows" style="padding:0 8px 8px">${ings.slice(0, 12).map(i => ingRow(i)).join("")}</div>` : "")
       + (recipes.length ? `<div class="sr-head">Recipes</div><div class="rows" style="padding:0 8px 8px">${recipes.slice(0, 6).map(r =>
@@ -369,6 +476,6 @@ async function boot() {
   // Pick up changes made on another device (e.g. someone ticking the list at the store).
   setInterval(() => {
     const typing = document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName);
-    if (!modalStack.length && !typing && document.visibilityState === "visible") refresh().catch(() => {});
+    if (!modalStack.length && !typing && document.visibilityState === "visible") refresh(true, { onlyIfChanged: true }).catch(() => {});
   }, 60000);
 }

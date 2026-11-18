@@ -133,6 +133,92 @@ def search_products(query: str, limit: int = 12) -> list[dict]:
     return out[:limit]
 
 
+# ── descriptions (Wikipedia) ──────────────────────────────────────────────────
+# TheMealDB has no description for about half its ingredients, and Open Food
+# Facts rarely has one, so descriptions come from the opening paragraph of the
+# matching Wikipedia article. Wikimedia wants a descriptive User-Agent and
+# rate-limits hard, so everything is batched into one or two requests and cached.
+
+WIKI_API = "https://en.wikipedia.org/w/api.php"
+WIKI_UA = "PantryShelf/1.0 (self-hosted kitchen inventory app)"
+_WIKI_QUALIFIERS = ("spice", "herb", "food", "condiment", "seasoning")
+_WIKI_BASE = {"action": "query", "format": "json", "formatversion": 2, "redirects": 1,
+              "prop": "extracts|pageprops|info", "inprop": "url", "ppprop": "disambiguation",
+              "exintro": 1, "explaintext": 1}
+_wiki_cache: dict[str, tuple[float, dict | None]] = {}
+
+
+def _wiki_get(params: dict) -> dict:
+    r = requests.get(WIKI_API, params={**_WIKI_BASE, **params},
+                     headers={"User-Agent": WIKI_UA}, timeout=8)
+    r.raise_for_status()
+    return r.json().get("query") or {}
+
+
+def _wiki_ok(p: dict) -> bool:
+    return (not p.get("missing") and "disambiguation" not in (p.get("pageprops") or {})
+            and bool((p.get("extract") or "").strip()))
+
+
+def _wiki_clean(text: str, limit: int = 600) -> str:
+    para = next((s for s in text.split("\n") if s.strip()), "")
+    para = re.sub(r"\s*\(\s*[;,]?\s*\)", "", para)       # "Thyme () is" left by stripped IPA
+    para = re.sub(r"\s+([,.;:])", r"\1", re.sub(r"\s{2,}", " ", para)).strip()
+    if len(para) <= limit:
+        return para
+    out = ""
+    for s in re.split(r"(?<=[.!?])\s+", para):
+        if out and len(out) + len(s) + 1 > limit:
+            break
+        out = f"{out} {s}".strip()
+    return out or para[:limit].rsplit(" ", 1)[0] + "…"
+
+
+def describe(name: str) -> dict | None:
+    """Opening paragraph of the best-matching Wikipedia article, or None.
+    Tries the name itself, then food-qualified titles ("Mace (spice)"), then a
+    cooking-biased search whose hit must actually mention every word of the name."""
+    q = " ".join((name or "").split())
+    if len(q) < 2:
+        return None
+    key = q.lower()
+    hit = _wiki_cache.get(key)
+    if hit and time.time() - hit[0] < (30 * 86400 if hit[1] else 3600):
+        return hit[1]
+
+    base = q[:1].upper() + q[1:].lower()
+    cands = [base] + [f"{base} ({s})" for s in _WIKI_QUALIFIERS]
+    found = None
+    try:
+        res = _wiki_get({"titles": "|".join(cands)})
+        alias = {a["from"]: a["to"] for a in (res.get("normalized") or []) + (res.get("redirects") or [])}
+        pages = {p["title"]: p for p in res.get("pages") or [] if _wiki_ok(p)}
+        for c in cands:
+            t = alias.get(c, c)
+            t = alias.get(t, t)
+            if t in pages:
+                found = pages[t]
+                break
+        if not found:
+            res = _wiki_get({"generator": "search", "gsrsearch": f"{q} cooking", "gsrlimit": 5})
+            words = [w for w in re.findall(r"\w+", key) if len(w) > 2] or [key]
+            for p in sorted(res.get("pages") or [], key=lambda p: p.get("index", 0)):
+                hay = f"{p['title']} {(p.get('extract') or '')[:250]}".lower()
+                if _wiki_ok(p) and all(w in hay for w in words):
+                    found = p
+                    break
+    except Exception as e:  # noqa: BLE001 - best-effort; don't cache failures (often a 429)
+        print(f"[describe] wikipedia failed for {q!r}: {e}")
+        return None
+
+    out = None
+    if found:
+        out = {"description": _wiki_clean(found["extract"]), "title": found["title"],
+               "url": found.get("fullurl") or ""}
+    _wiki_cache[key] = (time.time(), out)
+    return out
+
+
 def lookup(query: str) -> dict:
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
         g = ex.submit(search_generic, query)

@@ -1,8 +1,6 @@
 "use strict";
 // ── Ingredient detail, add-ingredient wizard, image picker, add-to-grocery ──
 
-const CONTAINERS = ["Jar", "Bag", "Box", "Bottle", "Can", "Tub", "Shaker", "Carton", "Pouch", "Tin", "Packet", "Canister", "Other"];
-const containerList = `<datalist id="containers">${CONTAINERS.map(c => `<option value="${c}">`).join("")}</datalist>`;
 
 function meter(st) {
   const segs = [];
@@ -32,21 +30,25 @@ function showIngredient(id) {
 
   function stockRow(st) {
     const isP = st.space === "pantry";
+    const ing = IX.ing.get(id);
+    const jar = jarSvg(st.container, { level: st.level, sid: st.id, img: ing.image,
+      title: `${st.container}, ${st.level * 10}% full. Tap to set the level.` });
+    const label = jar ? st.container_qty : [st.container, st.container_qty].filter(Boolean).join(" · ");
     return `<div class="stock-row ${lvlClass(st.level)}">
+      ${jar || label ? `<div class="stock-jar ${jar ? "" : "text"}">${jar}${label ? `<div class="jar-size">${esc(label)}</div>` : ""}</div>` : ""}
       <div class="stock-main">
         <div class="where">📍 <select data-f="location_id" data-sid="${st.id}">${locOptions(st.space, st.location_id)}</select></div>
         ${meter(st)}
-        <div class="grid3">
-          <label class="field">Container<input list="containers" data-f="container" data-sid="${st.id}" value="${esc(st.container)}" placeholder="Jar"></label>
-          <label class="field">Container size<input data-f="container_qty" data-sid="${st.id}" value="${esc(st.container_qty)}" placeholder="500 g"></label>
-          ${isP ? `<label class="field">Refill qty<input data-f="refill_qty" data-sid="${st.id}" value="${esc(st.refill_qty)}" placeholder="2 bags"></label>
-          <label class="field">Price to replace<input data-f="price" data-sid="${st.id}" value="${st.price ?? ""}" placeholder="$" inputmode="decimal"></label>` : ""}
+        <div class="stock-btns">
+          <button class="btn small green" data-full="${st.id}">Full</button>
+          <button class="btn small red" data-empty="${st.id}">Empty</button>
+          <span class="spacer"></span>
+          <button class="btn small" data-delstock="${st.id}" title="Remove this spot">✕ Remove spot</button>
         </div>
-      </div>
-      <div class="stock-side">
-        <button class="btn small green" data-full="${st.id}">Full</button>
-        <button class="btn small red" data-empty="${st.id}">Empty</button>
-        <button class="btn small" data-delstock="${st.id}" title="Remove this spot">✕</button>
+        ${isP ? `<div class="grid2">
+          <label class="field">Refill qty<input data-f="refill_qty" data-sid="${st.id}" value="${esc(st.refill_qty)}" placeholder="2 bags"></label>
+          <label class="field">Price to replace<input data-f="price" data-sid="${st.id}" value="${st.price ?? ""}" placeholder="$" inputmode="decimal"></label>
+        </div>` : ""}
       </div></div>`;
   }
 
@@ -63,7 +65,7 @@ function showIngredient(id) {
     };
     const onList = activeLists().filter(l => l.items.some(i => i.ingredient_id === id && !i.checked));
     const inPutaway = S.putaway.some(p => p.ingredient_id === id);
-    m.el.innerHTML = `${containerList}
+    m.el.innerHTML = `
       <div class="ing-top"><div class="pic">${pic(ing)}</div>
         <div style="flex:1;min-width:0"><h2>${esc(ing.name)}</h2>
           <div class="meta">${[ing.brand, ing.category].filter(Boolean).map(esc).join(" · ")}${ing.archived ? ' · <span class="src">archived</span>' : ""}</div>
@@ -73,14 +75,15 @@ function showIngredient(id) {
           ${inPutaway ? `<div class="desc" style="color:#ffc65c">📦 Waiting to be put away</div>` : ""}
         </div></div>
       <div class="toolbar">
-        <button class="btn blue" data-grocery>🛒 Add to grocery list</button>
-        <button class="btn" data-edit>✏️ Edit details</button>
-        <button class="btn" data-archive>${ing.archived ? "♻️ Restore" : "🗃️ Archive"}</button>
-        <span class="spacer"></span>
-        <button class="btn red small" data-delete>🗑️ Delete</button></div>
+        <button class="btn blue" data-grocery>🛒 Add to grocery list</button></div>
       ${block("kitchen", "Kitchen", "🍳")}
       ${block("pantry", "Pantry", "🥫")}
-      <div id="ing-hist">${hist ? histHtml(hist) : `<div class="spinner small"></div>`}</div>`;
+      <div id="ing-hist">${hist ? histHtml(hist) : `<div class="spinner small"></div>`}</div>
+      <div class="toolbar" style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border)">
+        <button class="btn small" data-edit>✏️ Edit details</button>
+        <button class="btn small" data-archive>${ing.archived ? "♻️ Restore" : "🗃️ Archive"}</button>
+        <span class="spacer"></span>
+        <button class="btn red small" data-delete>🗑️ Delete</button></div>`;
   }
 
   function histHtml(h) {
@@ -93,7 +96,8 @@ function showIngredient(id) {
       <div class="stat-row">
         <span>Last bought: <b>${h.days_since_last == null ? "never logged" : h.days_since_last === 0 ? "today" : `${h.days_since_last} days ago`}</b></span>
         <span>Usually every: <b>${h.avg_days_between == null ? "–" : `${h.avg_days_between} days`}</b></span>
-        <span>Times bought: <b>${h.purchases.length}</b></span></div>
+        <span>Times bought: <b>${h.purchases.length}</b></span>
+        <span title="Counted when a spot's level goes up by 30% or more">Times refilled: <b>${IX.ing.get(id)?.refills || 0}</b></span></div>
       <div class="log">${rows || `<span class="muted">Ticking it off a grocery list logs a purchase here.</span>`}</div></div>
       <div class="space-block"><h3>📖 Used in recipes</h3>
       ${h.recipes.length ? `<div class="chips">${h.recipes.map(r => `<a class="chip" href="#/recipes/${r.id}" data-close-go>${esc(r.title)}${r.rating ? ` ${"★".repeat(r.rating)}` : ""}</a>`).join("")}</div>`
@@ -103,6 +107,8 @@ function showIngredient(id) {
   const patchStock = (sid, body) => act(() => api("PATCH", `/api/stock/${sid}`, body));
 
   m.el.addEventListener("click", async e => {
+    const jarEl = e.target.closest("svg.jar[data-sid]");
+    if (jarEl) return patchStock(jarEl.dataset.sid, { level: jarLevelAt(jarEl, e.clientY) });
     const t = e.target.closest("button, a");
     if (!t) return;
     const d = t.dataset;
@@ -213,9 +219,16 @@ function editIngredient(id) {
   const m = openModal(`<h2>Edit ${esc(ing.name)}</h2>
     <div class="grid2"><label class="field">Name<input name="name" value="${esc(ing.name)}"></label>
       <label class="field">Brand<input name="brand" value="${esc(ing.brand)}"></label></div>
-    <label class="field">Category<input name="category" value="${esc(ing.category)}" placeholder="e.g. Spices"></label>
+    ${categoryField(ing.category)}
     <label class="field">Description<textarea name="description" rows="3">${esc(ing.description)}</textarea></label>
+    <div style="margin-top:-4px"><button class="btn small" data-wiki>📖 Fill from Wikipedia</button></div>
     <label class="field">Notes<textarea name="notes" rows="2" placeholder="e.g. Buy the big Costco bag">${esc(ing.notes)}</textarea></label>
+    ${ing.stock.length ? `<div class="edit-spots"><div class="clabel">Containers</div>${ing.stock.map(st => `
+      <div class="edit-spot" data-spot="${st.id}">
+        <div class="spot-name">${st.space === "kitchen" ? "🍳" : "🥫"} ${esc(st.location_id ? locPath(st.location_id) : `${st.space === "kitchen" ? "Kitchen" : "Pantry"} · not placed yet`)}</div>
+        ${containerPicker(st.container, "data-ec")}
+        <label class="field spot-size">Container size<input data-ec-qty value="${esc(st.container_qty)}" placeholder="500 g"></label>
+      </div>`).join("")}</div>` : ""}
     <div><div class="field" style="margin-bottom:6px">Picture <button class="btn small" data-findpics style="margin-left:8px">🔍 Find pictures</button></div><div id="pp"></div></div>
     <div class="actions"><button class="btn" data-cancel>Cancel</button><button class="btn primary" data-save>Save</button></div>`, { wide: true });
   const picker = imagePicker($("#pp", m.el), { choices: ing.image ? [{ src: ing.image, remote: false }] : [], selected: ing.image ? 0 : null });
@@ -229,12 +242,44 @@ function editIngredient(id) {
     } catch (err) { toast(err.message, { err: true }); }
     e.target.disabled = false;
   };
+  $("[data-wiki]", m.el).onclick = async e => {
+    const btn = e.target, q = $("[name=name]", m.el).value.trim();
+    if (!q) return;
+    btn.disabled = true;
+    try {
+      const w = await api("GET", `/api/describe?q=${encodeURIComponent(q)}`);
+      if (w.description) { $("[name=description]", m.el).value = w.description; toast(`From Wikipedia: ${w.title}`); }
+      else toast(`No Wikipedia article found for “${q}”`, { err: true });
+    } catch (err) { toast(err.message, { err: true }); }
+    btn.disabled = false;
+  };
+  // Container buttons: picking a jar selects it and fills in its size.
+  m.el.addEventListener("click", e => {
+    const b = e.target.closest("[data-cpick]");
+    if (!b) return;
+    const spot = b.closest("[data-spot]"), qty = $("[data-ec-qty]", spot);
+    cpickClick(b, qty.value, (kind, size) => {
+      spot.querySelectorAll(".cbtn").forEach(x => x.classList.toggle("sel", x === b));
+      $(".cother", spot).hidden = true;
+      qty.value = size;
+    });
+  });
+  const spotChanges = () => [...m.el.querySelectorAll("[data-spot]")].map(spot => {
+    const sel = $(".cbtn.sel", spot), st = ing.stock.find(s => s.id === +spot.dataset.spot);
+    const container = !sel ? "" : sel.dataset.cpick || $(".cother", spot).value.trim();
+    const container_qty = $("[data-ec-qty]", spot).value.trim();
+    return st && (container !== st.container || container_qty !== st.container_qty) ? [st.id, { container, container_qty }] : null;
+  }).filter(Boolean);
   $("[data-cancel]", m.el).onclick = () => closeModal(m);
   $("[data-save]", m.el).onclick = async () => {
     const body = {};
     for (const k of ["name", "brand", "category", "description", "notes"]) body[k] = $(`[name=${k}]`, m.el).value;
     try { body.image = await picker.value(); } catch (e) { toast(e.message, { err: true }); return; }
-    await act(() => api("PATCH", `/api/ingredients/${id}`, body));
+    const spots = spotChanges();
+    await act(async () => {
+      await api("PATCH", `/api/ingredients/${id}`, body);
+      for (const [sid, b] of spots) await api("PATCH", `/api/stock/${sid}`, b);
+    });
     closeModal(m);
   };
 }
@@ -287,7 +332,7 @@ function addIngredient({ name = "", space = null, loc = null } = {}) {
   function resultsHtml() {
     if (st.loading) return `<div class="spinner"></div>`;
     const { generic, products } = st.results;
-    if (!st.q.trim()) return `<p class="muted" style="font-size:.85rem">Searches TheMealDB's ingredient list (generic items with a description and photo) and Open Food Facts (packaged products and brands).</p>`;
+    if (!st.q.trim()) return `<p class="muted" style="font-size:.85rem">Searches TheMealDB's ingredient list (generic items with a photo) and Open Food Facts (packaged products and brands). Descriptions come from Wikipedia.</p>`;
     return `${generic.length ? `<div class="sr-head" style="padding-left:0">Ingredients</div><div class="results">${generic.map((r, i) => resultCard(r, i, "generic")).join("")}</div>` : ""}
       ${products.length ? `<div class="sr-head" style="padding-left:0;margin-top:8px">Products</div><div class="results">${products.map((r, i) => resultCard(r, i, "products")).join("")}</div>` : ""}
       ${!generic.length && !products.length && st.searched ? `<p class="muted">No matches online, which is fine. Use the name as typed.</p>` : ""}`;
@@ -311,17 +356,37 @@ function addIngredient({ name = "", space = null, loc = null } = {}) {
     const r = st.results[kind][i];
     st.pick = { kind, i };
     st.picker = st.pickerEl = null;
-    st.d = { name: r.name, brand: r.brand || "", category: r.category || "", description: r.description || "",
+    st.d = { name: r.name, brand: r.brand || "", category: normCategory(r.category) || normCategory(r.description) || normCategory(r.name),
+             description: r.description || "",
              source: r.source, source_ref: r.source_ref };
     if (r.quantity) st.places.pantry.container_qty = st.places.kitchen.container_qty = r.quantity;
-    st.step = 2; step2();
+    st.step = 2; step2(); wikiFill(r);
+  }
+
+  // Swap in Wikipedia's opening paragraph (TheMealDB and Open Food Facts often
+  // have none), unless the description was edited while the lookup ran.
+  function wikiFill(r) {
+    const q = ((r && r.source === "off" ? (r.description || r.category) : "") || st.d.name).trim();
+    if (q.length < 2) return;
+    st.wikiQ = q;
+    const before = st.d.description.trim();
+    const ta = () => $("textarea[name=description]", m.el);
+    if (ta()) ta().placeholder = "Looking up Wikipedia…";
+    api("GET", `/api/describe?q=${encodeURIComponent(q)}`).catch(() => ({})).then(w => {
+      if (st.wikiQ !== q) return;
+      const t = ta();
+      if (t) t.placeholder = "optional";
+      if (!w.description || (t ? t.value.trim() : st.d.description.trim()) !== before) return;
+      st.d.description = w.description;
+      if (t) t.value = w.description;
+    });
   }
 
   function step2() {
     m.el.innerHTML = `<h2>Add an ingredient</h2>${stepsBar()}
       <div class="grid2"><label class="field">Name<input name="name" value="${esc(st.d.name)}"></label>
         <label class="field">Brand<input name="brand" value="${esc(st.d.brand)}" placeholder="optional"></label></div>
-      <label class="field">Category<input name="category" value="${esc(st.d.category)}" placeholder="e.g. Spices, Baking, Canned goods"></label>
+      ${categoryField(st.d.category)}
       <label class="field">Description<textarea name="description" rows="2" placeholder="optional">${esc(st.d.description)}</textarea></label>
       <div><div class="field" style="margin-bottom:6px">Picture</div><div id="wpic"></div></div>
       <div class="actions"><button class="btn" data-back>‹ Back</button><button class="btn primary" data-next>Next ›</button></div>`;
@@ -348,8 +413,8 @@ function addIngredient({ name = "", space = null, loc = null } = {}) {
       <label class="place-toggle"><input type="checkbox" data-on ${p.on ? "checked" : ""}> ${isP ? "🥫 In the pantry" : "🍳 In the kitchen"}</label>
       <label class="field">Where<select data-k="location_id">${locOptions(space, p.location_id)}</select></label>
       <div><div class="field" style="margin-bottom:4px">How full</div>${meter({ level: p.level })}</div>
-      <div class="grid${isP ? "2" : "2"}">
-        <label class="field">Container<input list="containers" data-k="container" value="${esc(p.container)}" placeholder="Jar, Bag, Box…"></label>
+      <div><div class="clabel">Container</div>${containerPicker(p.container, `data-k="container"`)}</div>
+      <div class="grid2">
         <label class="field">Container size<input data-k="container_qty" value="${esc(p.container_qty)}" placeholder="500 g"></label>
         ${isP ? `<label class="field">Refill qty<input data-k="refill_qty" value="${esc(p.refill_qty)}" placeholder="1 bag"></label>
         <label class="field">Price to replace<input data-k="price" value="${esc(p.price)}" placeholder="$" inputmode="decimal"></label>` : ""}
@@ -357,7 +422,7 @@ function addIngredient({ name = "", space = null, loc = null } = {}) {
   }
 
   function step3() {
-    m.el.innerHTML = `${containerList}<h2>Where does ${esc(st.d.name)} live?</h2>${stepsBar()}
+    m.el.innerHTML = `<h2>Where does ${esc(st.d.name)} live?</h2>${stepsBar()}
       ${placeBlock("kitchen")}${placeBlock("pantry")}
       <p class="muted" style="font-size:.8rem">Pick one, both, or neither (you can place it later).</p>
       <div class="actions"><button class="btn" data-back>‹ Back</button><button class="btn primary" data-save>✓ Add ${esc(st.d.name)}</button></div>`;
@@ -386,9 +451,9 @@ function addIngredient({ name = "", space = null, loc = null } = {}) {
     if (d.pick) { const [k, i] = d.pick.split(":"); return choose(k, +i); }
     if ("plain" in d) {
       if (st.pick) { st.step = 2; return step2(); }
-      st.d = { name: st.q.trim(), brand: "", category: "", description: "", source: "manual", source_ref: "" };
+      st.d = { name: st.q.trim(), brand: "", category: normCategory(st.q), description: "", source: "manual", source_ref: "" };
       st.picker = st.pickerEl = null;
-      st.step = 2; return step2();
+      st.step = 2; step2(); return wikiFill(null);
     }
     if ("back" in d) {
       if (st.step === 2) { saveStep2(); st.step = 1; step1(); }
@@ -397,6 +462,10 @@ function addIngredient({ name = "", space = null, loc = null } = {}) {
     }
     if ("next" in d) { if (saveStep2()) { st.step = 3; step3(); } return; }
     if ("save" in d) return save(t);
+    if (d.cpick !== undefined) {
+      const p = st.places[t.closest("[data-space]").dataset.space];
+      return cpickClick(t, p.container_qty, (c, q) => { p.container = c; p.container_qty = q; step3(); });
+    }
     if (d.lvl !== undefined) {
       const sp = t.closest("[data-space]").dataset.space;
       st.places[sp].level = +d.lvl; step3();

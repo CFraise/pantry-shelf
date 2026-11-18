@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import db
 import koi_mirror
@@ -81,6 +81,8 @@ def snapshot() -> dict:
         stock = db.rows(c.execute("SELECT * FROM stock ORDER BY id"))
         last_bought = {r[0]: r[1] for r in c.execute(
             "SELECT ingredient_id, MAX(bought_at) FROM purchases GROUP BY ingredient_id")}
+        refills = {r[0]: r[1] for r in c.execute(
+            "SELECT ingredient_id, COUNT(*) FROM refills GROUP BY ingredient_id")}
         lists = db.rows(c.execute(
             "SELECT * FROM grocery_lists ORDER BY pinned DESC, done_at IS NOT NULL, "
             "COALESCE(done_at, created_at) DESC"))
@@ -98,6 +100,7 @@ def snapshot() -> dict:
     for i in ings:
         i["stock"] = by_ing.get(i["id"], [])
         i["last_bought"] = last_bought.get(i["id"])
+        i["refills"] = refills.get(i["id"], 0)
     by_list = defaultdict(list)
     for it in items:
         by_list[it["list_id"]].append(it)
@@ -285,6 +288,23 @@ def add_stock(iid: int, body: dict) -> dict:
     return get_ingredient(iid)
 
 
+REFILL_MIN_RISE = 3              # level steps (30%) that count as a refill
+REFILL_DEDUPE = timedelta(hours=6)
+
+
+def _note_refill(c, sid: int, iid: int, old: int, new: int) -> None:
+    """Log a refill when a spot's level jumps up by REFILL_MIN_RISE or more.
+    Repeat jumps on the same spot within REFILL_DEDUPE (fixing a mis-tap)
+    count once."""
+    if new - old < REFILL_MIN_RISE:
+        return
+    last = c.execute("SELECT MAX(at) FROM refills WHERE stock_id = ?", (sid,)).fetchone()[0]
+    if last and datetime.fromisoformat(last) > datetime.now() - REFILL_DEDUPE:
+        return
+    c.execute("INSERT INTO refills (ingredient_id, stock_id, from_level, to_level, at) VALUES (?, ?, ?, ?, ?)",
+              (iid, sid, old, new, db.now()))
+
+
 def update_stock(sid: int, body: dict) -> dict:
     with db.tx() as c:
         s = db.row(c.execute("SELECT * FROM stock WHERE id = ?", (sid,)))
@@ -297,6 +317,8 @@ def update_stock(sid: int, body: dict) -> dict:
                 raise BadRequest("location is not in that space")
         _update(c, "stock", sid, body, STOCK_FIELDS)
         c.execute("UPDATE stock SET updated_at = ? WHERE id = ?", (db.now(), sid))
+        if "level" in body:
+            _note_refill(c, sid, s["ingredient_id"], s["level"], _level(body["level"]))
     koi_mirror.push(s["ingredient_id"])
     return get_ingredient(s["ingredient_id"])
 
@@ -582,8 +604,11 @@ def finish_putaway(pid: int, body: dict) -> None:
             sids = [int(body["stock_id"])] if body.get("stock_id") else \
                 [r[0] for r in c.execute("SELECT id FROM stock WHERE ingredient_id = ?", (iid,))]
             for sid in sids:
+                old = c.execute("SELECT level FROM stock WHERE id = ? AND ingredient_id = ?", (sid, iid)).fetchone()
                 c.execute("UPDATE stock SET level = ?, updated_at = ? WHERE id = ? AND ingredient_id = ?",
                           (level, db.now(), sid, iid))
+                if old:
+                    _note_refill(c, sid, iid, old[0], level)
         c.execute("DELETE FROM putaway WHERE id = ?", (pid,))
     koi_mirror.push(iid)
 

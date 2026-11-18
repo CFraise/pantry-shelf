@@ -107,6 +107,11 @@ def lookup():
     return jsonify(sources.lookup(q))
 
 
+@app.get("/api/describe")
+def describe():
+    return jsonify(sources.describe(request.args.get("q") or "") or {})
+
+
 # ── locations ─────────────────────────────────────────────────────────────────
 
 @app.post("/api/locations")
